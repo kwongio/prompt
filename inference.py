@@ -1,76 +1,51 @@
 import json
 from dotenv import load_dotenv
 import os
-
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
 from openai import Client
-from prompt_template import prompt_template, prompt_template_function_calling
+from pydantic import BaseModel
+
+from prompt_template import prompt_template_langchain
 
 load_dotenv()
 
 client = Client(
-    api_key = os.getenv("API_KEY")
+    api_key=os.getenv("API_KEY")
 )
 
-def inference(review):
-    prompt = prompt_template.format(review=review)
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0
-    )
-    output = response.choices[0].message.content
-    return output
+
+class Output(BaseModel):
+    summary: str
+
+output_parser = PydanticOutputParser(pydantic_object=Output)
+prompt_maker = PromptTemplate(
+    template=prompt_template_langchain,
+    input_variables=["review"],
+    partial_variables={"format_instructions": output_parser.get_format_instructions()},
+)
+
+model = ChatOpenAI(
+    temperature=0.0,
+    openai_api_key=os.getenv("API_KEY"),
+    model_name="gpt-4o-mini",
+)
+
+chain = (prompt_maker | model | output_parser)
 
 
-def inference_function_calling(review):
-    prompt = prompt_template_function_calling.format(review=review)
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "extract_positive_and_negetive_keywords",
-                "description": "Extract positive keywords and negative keywords in given movie review.",
-                "parameters": {
-                    "$schema": "http://json-schema.org/draft-07/schema#",
-                    "type": "object",
-                    "properties": {
-                        "positive_keywords": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "negative_keywords": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "required": ["positive_keywords", "negative_keywords"]
-                }
-            }
-        }
-    ]
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0,
-        response_format={"type": "json_object"},
-        tools=tools,
-        tool_choice={"type": "function", "function": {"name": "extract_positive_and_negetive_keywords"}}
-    )
-    output = response.choices[0].message.tool_calls[0].function.arguments
-    output_json = json.loads(output)
-    return output_json
+def inference_langchain(reviews):
+    reviews = "\n".join(reviews)
+    output = chain.invoke({"reviews": reviews})
+    return output.summary
 
 
 if __name__ == '__main__':
-    print(inference_function_calling("보는 내내 시간 가는줄 모르고 정말 재밌게 봤습니다~"))
-    # print(inference("정말 쓰레기같은 영화... 다신 안본다"))
+    print(inference_langchain(
+        [
+            "보는 내내 시간 가는줄 모르고 정말 재밌게 봤습니다~",
+            "정말 쓰레기같은 영화... 다신 안본다",
+            "이런 영화가 있을 수가... 정말 재미없었어요"
+        ]
+    ))
